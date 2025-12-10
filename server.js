@@ -710,10 +710,10 @@ app.get('/api/debug/apify-data', requireAuth, async (req, res) => {
 /**
  * Get all reports
  */
-app.get('/api/reports', requireAuth, (req, res) => {
+app.get('/api/reports', requireAuth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
-    const reports = dbService.getAllReports(limit);
+    const reports = await dbService.getAllReports(limit);
     res.json(reports);
   } catch (error) {
     console.error('Error fetching reports:', error);
@@ -724,9 +724,9 @@ app.get('/api/reports', requireAuth, (req, res) => {
 /**
  * Get a specific report by ID
  */
-app.get('/api/reports/:id', requireAuth, (req, res) => {
+app.get('/api/reports/:id', requireAuth, async (req, res) => {
   try {
-    const report = dbService.getReportById(req.params.id);
+    const report = await dbService.getReportById(req.params.id);
     if (!report) {
       return res.status(404).json({ error: 'Report not found' });
     }
@@ -740,7 +740,7 @@ app.get('/api/reports/:id', requireAuth, (req, res) => {
 /**
  * Save a report
  */
-app.post('/api/reports', requireAuth, (req, res) => {
+app.post('/api/reports', requireAuth, async (req, res) => {
   try {
     const { username, platforms, report, rawData, dateRange } = req.body;
 
@@ -751,7 +751,7 @@ app.post('/api/reports', requireAuth, (req, res) => {
       });
     }
 
-    const savedReport = dbService.saveReport(username, platforms, report, rawData, dateRange);
+    const savedReport = await dbService.saveReport(username, platforms, report, rawData, dateRange);
     res.json(savedReport);
   } catch (error) {
     console.error('Error saving report:', error);
@@ -766,9 +766,9 @@ app.post('/api/reports', requireAuth, (req, res) => {
 /**
  * Delete a report
  */
-app.delete('/api/reports/:id', requireAuth, (req, res) => {
+app.delete('/api/reports/:id', requireAuth, async (req, res) => {
   try {
-    const deleted = dbService.deleteReport(req.params.id);
+    const deleted = await dbService.deleteReport(req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: 'Report not found' });
     }
@@ -1042,7 +1042,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Database: ${join(process.cwd(), 'data', 'reports.db')}`);
+  console.log(`Database: ${process.env.DATABASE_URL ? 'PostgreSQL (connected)' : 'PostgreSQL (no DATABASE_URL)'}`);
   console.log(`APIFY_TOKEN: ${APIFY_TOKEN ? '✓ Configured' : '✗ Missing'}`);
   console.log(`OPENAI_API_KEY: ${OPENAI_API_KEY ? '✓ Configured' : '✗ Missing'}`);
   console.log(`Authentication: ✓ Enabled (username: ${AUTH_USERNAME})`);

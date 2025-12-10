@@ -11,7 +11,7 @@ npm-debug.log
 dist
 .vite
 
-# Database files (will be mounted as volume)
+# Local database files (not used in production - using PostgreSQL)
 data/
 *.db
 *.db-journal

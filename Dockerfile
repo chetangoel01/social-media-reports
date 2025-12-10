@@ -22,14 +22,11 @@ FROM node:18-alpine AS production
 
 WORKDIR /app
 
-# Install build dependencies for native modules (better-sqlite3)
-RUN apk add --no-cache python3 make g++
-
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies
-RUN npm ci --production
+# Install production dependencies only (pg doesn't need native build tools)
+RUN npm ci --omit=dev
 
 # Copy backend server files
 COPY server.js .
@@ -39,9 +36,6 @@ COPY vite.config.js .
 
 # Copy built frontend from builder stage
 COPY --from=frontend-builder /app/dist ./dist
-
-# Create data directory for SQLite database
-RUN mkdir -p /app/data
 
 # Set environment variables
 ENV NODE_ENV=production
