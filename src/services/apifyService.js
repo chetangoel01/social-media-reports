@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import api from './api';
 
 /**
  * Frontend service that calls backend API for Apify operations
@@ -21,15 +19,7 @@ class ApifyService {
         requestBody.dateRange = dateRange;
       }
 
-      const response = await axios.post(
-        `${API_BASE}/api/fetch-social-data`,
-        requestBody,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const response = await api.post('/api/fetch-social-data', requestBody);
 
       return response.data;
     } catch (error) {

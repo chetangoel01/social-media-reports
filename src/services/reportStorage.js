@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import api from './api';
 
 /**
  * Service for storing and retrieving reports from backend database
@@ -16,21 +14,13 @@ class ReportStorage {
    */
   async saveReport(username, platforms, reportData, rawPlatformData, dateRange = null) {
     try {
-      const response = await axios.post(
-        `${API_BASE}/api/reports`,
-        {
-          username,
-          platforms,
-          report: reportData,
-          rawData: rawPlatformData,
-          dateRange: dateRange,
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const response = await api.post('/api/reports', {
+        username,
+        platforms,
+        report: reportData,
+        rawData: rawPlatformData,
+        dateRange: dateRange,
+      });
 
       return response.data;
     } catch (error) {
@@ -94,7 +84,7 @@ class ReportStorage {
    */
   async getAllReports() {
     try {
-      const response = await axios.get(`${API_BASE}/api/reports`);
+      const response = await api.get('/api/reports');
       return response.data;
     } catch (error) {
       console.error('Error fetching reports from backend:', error);
@@ -122,7 +112,7 @@ class ReportStorage {
    */
   async getReportById(id) {
     try {
-      const response = await axios.get(`${API_BASE}/api/reports/${id}`);
+      const response = await api.get(`/api/reports/${id}`);
       return response.data;
     } catch (error) {
       console.error('Error fetching report:', error);
@@ -145,7 +135,7 @@ class ReportStorage {
    */
   async deleteReport(id) {
     try {
-      await axios.delete(`${API_BASE}/api/reports/${id}`);
+      await api.delete(`/api/reports/${id}`);
       return true;
     } catch (error) {
       console.error('Error deleting report:', error);

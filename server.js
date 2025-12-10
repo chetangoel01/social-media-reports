@@ -6,6 +6,7 @@ import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import dbService from './database.js';
 import axios from 'axios';
 
@@ -18,6 +19,15 @@ const PORT = process.env.PORT || 3001;
 // Supports both VITE_ prefixed (for compatibility) and direct names
 const APIFY_TOKEN = process.env.APIFY_TOKEN || process.env.VITE_APIFY_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+
+// Authentication configuration
+// Default credentials - in production, use environment variables
+const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'admin123';
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Simple token storage (in production, use a database or Redis)
+const validTokens = new Set();
 const APIFY_API_BASE = 'https://api.apify.com/v2';
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -41,6 +51,81 @@ if (existsSync(distPath)) {
 
 // Serve static assets from root (for development)
 app.use(express.static(__dirname));
+
+// Helper function to generate a secure token
+function generateToken() {
+  return crypto.randomBytes(48).toString('hex');
+}
+
+// Authentication middleware
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  const token = authHeader.substring(7);
+
+  if (!validTokens.has(token)) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  next();
+}
+
+// Authentication endpoints
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
+    const token = generateToken();
+    validTokens.add(token);
+
+    // Log successful login
+    console.log(`User "${username}" logged in successfully`);
+
+    return res.json({
+      token,
+      user: {
+        username,
+      },
+    });
+  }
+
+  return res.status(401).json({ error: 'Invalid username or password' });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers.authorization;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    validTokens.delete(token);
+  }
+
+  res.json({ success: true });
+});
+
+app.get('/api/auth/verify', (req, res) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  const token = authHeader.substring(7);
+
+  if (validTokens.has(token)) {
+    return res.json({ valid: true });
+  }
+
+  return res.status(401).json({ error: 'Invalid token' });
+});
 
 // API Routes (before the catch-all route)
 
@@ -406,7 +491,7 @@ Use the exact format specified in the system prompt. Fill in all tables with the
 /**
  * Generate report using LLM API
  */
-app.post('/api/generate-report', async (req, res) => {
+app.post('/api/generate-report', requireAuth, async (req, res) => {
   try {
     const { combinedData, username } = req.body;
 
@@ -529,7 +614,7 @@ FORMATTING REQUIREMENTS:
 /**
  * Fetch social media data from Apify
  */
-app.post('/api/fetch-social-data', async (req, res) => {
+app.post('/api/fetch-social-data', requireAuth, async (req, res) => {
   try {
     const { platforms, username, dateRange } = req.body;
 
@@ -591,7 +676,7 @@ app.post('/api/fetch-social-data', async (req, res) => {
  * Debug endpoint to inspect raw Apify data structure
  * GET /api/debug/apify-data?platform=instagram&username=test
  */
-app.get('/api/debug/apify-data', async (req, res) => {
+app.get('/api/debug/apify-data', requireAuth, async (req, res) => {
   try {
     const { platform, username } = req.query;
 
@@ -625,7 +710,7 @@ app.get('/api/debug/apify-data', async (req, res) => {
 /**
  * Get all reports
  */
-app.get('/api/reports', (req, res) => {
+app.get('/api/reports', requireAuth, (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const reports = dbService.getAllReports(limit);
@@ -639,7 +724,7 @@ app.get('/api/reports', (req, res) => {
 /**
  * Get a specific report by ID
  */
-app.get('/api/reports/:id', (req, res) => {
+app.get('/api/reports/:id', requireAuth, (req, res) => {
   try {
     const report = dbService.getReportById(req.params.id);
     if (!report) {
@@ -655,7 +740,7 @@ app.get('/api/reports/:id', (req, res) => {
 /**
  * Save a report
  */
-app.post('/api/reports', (req, res) => {
+app.post('/api/reports', requireAuth, (req, res) => {
   try {
     const { username, platforms, report, rawData, dateRange } = req.body;
 
@@ -681,7 +766,7 @@ app.post('/api/reports', (req, res) => {
 /**
  * Delete a report
  */
-app.delete('/api/reports/:id', (req, res) => {
+app.delete('/api/reports/:id', requireAuth, (req, res) => {
   try {
     const deleted = dbService.deleteReport(req.params.id);
     if (!deleted) {
@@ -697,7 +782,7 @@ app.delete('/api/reports/:id', (req, res) => {
 /**
  * Convert markdown to PDF
  */
-app.post('/api/convert-to-pdf', async (req, res) => {
+app.post('/api/convert-to-pdf', requireAuth, async (req, res) => {
   let tempCssPath = null;
   
   try {
@@ -960,4 +1045,5 @@ app.listen(PORT, () => {
   console.log(`Database: ${join(process.cwd(), 'data', 'reports.db')}`);
   console.log(`APIFY_TOKEN: ${APIFY_TOKEN ? '✓ Configured' : '✗ Missing'}`);
   console.log(`OPENAI_API_KEY: ${OPENAI_API_KEY ? '✓ Configured' : '✗ Missing'}`);
+  console.log(`Authentication: ✓ Enabled (username: ${AUTH_USERNAME})`);
 });

@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from './contexts/AuthContext';
+import LoginPage from './components/LoginPage';
 import ReportForm from './components/ReportForm';
 import LoadingSpinner from './components/LoadingSpinner';
 import ReportDisplay from './components/ReportDisplay';
@@ -13,6 +15,7 @@ import './App.css';
 const USE_MOCK_DATA = false;
 
 function App() {
+  const { isAuthenticated, isLoading: authLoading, user, logout } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('Loading...');
   const [report, setReport] = useState(null);
@@ -23,14 +26,16 @@ function App() {
   const [storedReports, setStoredReports] = useState([]);
   const [showStoredReports, setShowStoredReports] = useState(false);
 
-  // Load stored reports on mount
+  // Load stored reports when authenticated
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     const loadReports = async () => {
       const reports = await reportStorage.getAllReports();
       setStoredReports(reports);
     };
     loadReports();
-  }, []);
+  }, [isAuthenticated]);
 
   const handleGenerateReport = async ({ username, platforms, dateRange }) => {
     setIsLoading(true);
@@ -109,12 +114,55 @@ function App() {
     }
   };
 
+  // Show loading spinner while checking auth
+  if (authLoading) {
+    return (
+      <div className="app" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <LoadingSpinner message="Loading..." />
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
   return (
     <div className="app">
       <header className="app-header">
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 24px' }}>
-          <h1>Social Media Report Generator</h1>
-          <p>Analyze your social media presence across multiple platforms</p>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1>Social Media Report Generator</h1>
+            <p>Analyze your social media presence across multiple platforms</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <span style={{ fontSize: '14px', color: '#64748b' }}>
+              Signed in as <strong style={{ color: '#1e293b' }}>{user?.username}</strong>
+            </span>
+            <button
+              onClick={logout}
+              style={{
+                padding: '10px 20px',
+                background: '#f1f5f9',
+                color: '#475569',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.background = '#e2e8f0';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = '#f1f5f9';
+              }}
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </header>
 

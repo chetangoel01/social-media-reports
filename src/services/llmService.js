@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import api from './api';
 
 /**
  * Frontend service that calls backend API for LLM report generation
@@ -11,18 +9,10 @@ class LLMService {
    */
   async generateReport(combinedData, username) {
     try {
-      const response = await axios.post(
-        `${API_BASE}/api/generate-report`,
-        {
-          combinedData,
-          username,
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const response = await api.post('/api/generate-report', {
+        combinedData,
+        username,
+      });
 
       return response.data.report;
     } catch (error) {

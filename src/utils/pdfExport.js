@@ -112,12 +112,18 @@ platforms: ${platforms.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(', 
     fullMarkdown = headerInfo + fullMarkdown;
 
     // Send to backend API for PDF conversion
-    const API_URL = import.meta.env.VITE_PDF_API_URL || 'http://localhost:3001';
+    // In production, use relative URLs (same origin). In dev, use localhost.
+    const API_URL = import.meta.env.VITE_PDF_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3001');
+    const authToken = localStorage.getItem('authToken');
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
     const response = await fetch(`${API_URL}/api/convert-to-pdf`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ markdown: fullMarkdown }),
     });
 
