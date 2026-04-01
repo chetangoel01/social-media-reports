@@ -39,6 +39,7 @@ const ACTOR_IDS = {
   twitter: 'ghSpYIW3L1RvT57NT', // Twitter/X Scraper
   tiktok: 'GdWCkxBtKWOsKjdch', // TikTok Scraper
 };
+const DEFAULT_ACTOR_MEMORY_MBYTES = Number.parseInt(process.env.APIFY_ACTOR_MEMORY_MBYTES || '256', 10);
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -132,17 +133,67 @@ app.get('/api/auth/verify', (req, res) => {
 /**
  * Start an Apify actor run
  */
-async function startActorRun(actorId, input) {
+function getApifyHeaders() {
+  return {
+    'Authorization': `Bearer ${APIFY_TOKEN}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function getApifyErrorMessage(payload) {
+  if (!payload) {
+    return null;
+  }
+
+  if (typeof payload === 'string') {
+    return payload;
+  }
+
+  return payload.error?.message || payload.message || JSON.stringify(payload);
+}
+
+function isMemoryLimitError(err) {
+  const message = `${getApifyErrorMessage(err?.response?.data) || err?.message || ''}`.toLowerCase();
+  return err?.response?.status === 402 && message.includes('memory limit');
+}
+
+function validateDateRange(dateRange) {
+  if (!dateRange || !dateRange.startDate || !dateRange.endDate) {
+    return;
+  }
+
+  const start = new Date(`${dateRange.startDate}T00:00:00Z`);
+  const end = new Date(`${dateRange.endDate}T00:00:00Z`);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new Error('Invalid date range');
+  }
+
+  if (start > end) {
+    throw new Error('Invalid date range');
+  }
+}
+
+async function startActorRun(actorId, input, options = {}) {
+  const actorName = options.actorName || actorId;
+  const memoryRequested = options.memory ?? options.memoryMbytes ?? DEFAULT_ACTOR_MEMORY_MBYTES;
+
+  console.log('Starting actor:', actorName, {
+    timestamp: new Date().toISOString(),
+    memoryRequested,
+  });
+
   const response = await axios.post(
     `${APIFY_API_BASE}/acts/${actorId}/runs`,
     { ...input },
     {
-      headers: {
-        'Authorization': `Bearer ${APIFY_TOKEN}`,
-        'Content-Type': 'application/json',
+      headers: getApifyHeaders(),
+      params: {
+        memory: memoryRequested,
       },
     }
   );
+
   return response.data.data;
 }
 
@@ -165,17 +216,113 @@ async function waitForRun(runId) {
     );
 
     const status = response.data.data.status;
-    
+
     if (status === 'SUCCEEDED') {
       return response.data.data;
     } else if (status === 'FAILED' || status === 'ABORTED' || status === 'TIMED-OUT') {
-      throw new Error(`Actor run ${status.toLowerCase()}`);
+      const error = new Error(`Actor run ${status.toLowerCase()}`);
+      error.runData = response.data.data;
+      throw error;
     }
 
     await new Promise(resolve => setTimeout(resolve, checkInterval));
   }
 
   throw new Error('Actor run timed out');
+}
+
+async function listActorRuns(limit = 50) {
+  const response = await axios.get(
+    `${APIFY_API_BASE}/actor-runs`,
+    {
+      headers: getApifyHeaders(),
+      params: {
+        limit,
+        desc: 1,
+      },
+    }
+  );
+
+  return response.data.data?.items || [];
+}
+
+async function deleteDataset(datasetId) {
+  if (!datasetId) {
+    return;
+  }
+
+  await axios.delete(`${APIFY_API_BASE}/datasets/${datasetId}`, {
+    headers: getApifyHeaders(),
+  });
+}
+
+async function deleteRun(runId) {
+  if (!runId) {
+    return;
+  }
+
+  await axios.delete(`${APIFY_API_BASE}/actor-runs/${runId}`, {
+    headers: getApifyHeaders(),
+  });
+}
+
+async function deleteKeyValueStore(storeId) {
+  if (!storeId) {
+    return;
+  }
+
+  await axios.delete(`${APIFY_API_BASE}/key-value-stores/${storeId}`, {
+    headers: getApifyHeaders(),
+  });
+}
+
+async function deleteRequestQueue(queueId) {
+  if (!queueId) {
+    return;
+  }
+
+  await axios.delete(`${APIFY_API_BASE}/request-queues/${queueId}`, {
+    headers: getApifyHeaders(),
+  });
+}
+
+async function cleanupApifyArtifacts({ datasetId, runId }) {
+  const cleaned = {};
+  const errors = [];
+
+  if (datasetId) {
+    try {
+      await deleteDataset(datasetId);
+      cleaned.datasetId = datasetId;
+    } catch (cleanupError) {
+      errors.push({
+        resource: 'dataset',
+        id: datasetId,
+        message: cleanupError?.response?.data || cleanupError.message,
+      });
+    }
+  }
+
+  if (runId) {
+    try {
+      await deleteRun(runId);
+      cleaned.runId = runId;
+    } catch (cleanupError) {
+      errors.push({
+        resource: 'run',
+        id: runId,
+        message: cleanupError?.response?.data || cleanupError.message,
+      });
+    }
+  }
+
+  if (Object.keys(cleaned).length > 0) {
+    console.log('Cleaned up:', cleaned);
+  }
+
+  if (errors.length > 0) {
+    console.error('Cleanup failed', errors);
+  }
 }
 
 /**
@@ -222,6 +369,9 @@ async function runActor(platform, username, dateRange = null) {
   if (!actorId) {
     throw new Error(`Unsupported platform: ${platform}`);
   }
+
+  let runId = null;
+  let datasetId = null;
 
   try {
     const cleanUsername = username.replace(/^@/, '');
@@ -308,9 +458,18 @@ async function runActor(platform, username, dateRange = null) {
       };
     }
     
-    const run = await startActorRun(actorId, actorInput);
+    const run = await startActorRun(actorId, actorInput, {
+      actorName: platform,
+      memory: DEFAULT_ACTOR_MEMORY_MBYTES,
+    });
+    runId = run.id;
+
     const finishedRun = await waitForRun(run.id);
-    const datasetId = finishedRun.defaultDatasetId;
+    runId = finishedRun.id || runId;
+    datasetId = finishedRun.defaultDatasetId;
+
+    console.log('Dataset used:', datasetId);
+
     const items = await getDatasetItems(datasetId);
 
     // Log the response structure for debugging
@@ -331,8 +490,23 @@ async function runActor(platform, username, dateRange = null) {
       dateRange: dateRange || null,
     };
   } catch (error) {
-    console.error(`Error running ${platform} actor:`, error);
-    throw new Error(`Failed to fetch ${platform} data: ${error.response?.data?.error?.message || error.message}`);
+    const runData = error.runData || {};
+    runId = runData.id || runId;
+    datasetId = runData.defaultDatasetId || datasetId;
+
+    console.error('ACTOR FAILED', {
+      actor: platform,
+      status: error?.response?.status,
+      message: error?.response?.data || error.message,
+      memoryLimitDetected: isMemoryLimitError(error),
+    });
+
+    throw new Error(`Failed to fetch ${platform} data: ${getApifyErrorMessage(error.response?.data) || error.message}`);
+  } finally {
+    // Keep the per-run footprint low to avoid exhausting the shared Apify memory budget.
+    if (runId || datasetId) {
+      await cleanupApifyArtifacts({ datasetId, runId });
+    }
   }
 }
 
@@ -630,6 +804,8 @@ app.post('/api/fetch-social-data', requireAuth, async (req, res) => {
       return res.status(500).json({ error: 'Apify token not configured on server' });
     }
 
+    validateDateRange(dateRange);
+
     // Log request with date range if provided
     if (dateRange && dateRange.startDate && dateRange.endDate) {
       console.log(`\n=== Fetching data for ${username} on platforms: ${platforms.join(', ')} ===`);
@@ -638,21 +814,24 @@ app.post('/api/fetch-social-data', requireAuth, async (req, res) => {
       console.log(`\n=== Fetching data for ${username} on platforms: ${platforms.join(', ')} ===\n`);
     }
 
-    // Fetch data from all platforms in parallel, passing dateRange
-    const promises = platforms.map(platform =>
-      runActor(platform, username, dateRange).catch(error => {
+    console.log('RUNNING ACTORS SEQUENTIALLY');
+
+    const results = [];
+    for (const platform of platforms) {
+      try {
+        const result = await runActor(platform, username, dateRange);
+        results.push(result);
+      } catch (error) {
         console.error(`Error fetching ${platform} data:`, error.message);
-        return {
+        results.push({
           platform,
           username,
           error: error.message,
           data: [],
           dateRange: dateRange || null,
-        };
-      })
-    );
-
-    const results = await Promise.all(promises);
+        });
+      }
+    }
 
     // Log summary of results
     console.log(`\n=== Fetch Summary ===`);
@@ -668,7 +847,113 @@ app.post('/api/fetch-social-data', requireAuth, async (req, res) => {
     res.json(results);
   } catch (error) {
     console.error('Error in fetch-social-data:', error);
+    if (error.message === 'Invalid date range') {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: error.message || 'Failed to fetch social media data' });
+  }
+});
+
+app.get('/api/debug/apify-runs', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 100);
+    const runs = await listActorRuns(limit);
+
+    res.json(runs.map((run) => ({
+      id: run.id,
+      status: run.status,
+      memory: run.options?.memoryMbytes ?? run.options?.memory,
+      startedAt: run.startedAt,
+      defaultDatasetId: run.defaultDatasetId,
+    })));
+  } catch (error) {
+    console.error('Error listing Apify runs:', error);
+    res.status(500).json({ error: error.message || 'Failed to list Apify runs' });
+  }
+});
+
+app.post('/api/debug/cleanup', requireAuth, async (req, res) => {
+  try {
+    const includeResources = req.body?.includeResources === true;
+    const runs = await listActorRuns(100);
+    const deletedRuns = [];
+    const deletedDatasets = [];
+    const deletedKeyValueStores = [];
+    const deletedRequestQueues = [];
+    const seenDatasets = new Set();
+    const seenStores = new Set();
+    const seenQueues = new Set();
+    const errors = [];
+
+    for (const run of runs) {
+      if (includeResources && run.defaultDatasetId && !seenDatasets.has(run.defaultDatasetId)) {
+        try {
+          seenDatasets.add(run.defaultDatasetId);
+          await deleteDataset(run.defaultDatasetId);
+          deletedDatasets.push(run.defaultDatasetId);
+        } catch (cleanupError) {
+          errors.push({
+            resource: 'dataset',
+            runId: run.id,
+            id: run.defaultDatasetId,
+            message: cleanupError?.response?.data || cleanupError.message,
+          });
+        }
+      }
+
+      if (includeResources && run.defaultKeyValueStoreId && !seenStores.has(run.defaultKeyValueStoreId)) {
+        try {
+          seenStores.add(run.defaultKeyValueStoreId);
+          await deleteKeyValueStore(run.defaultKeyValueStoreId);
+          deletedKeyValueStores.push(run.defaultKeyValueStoreId);
+        } catch (cleanupError) {
+          errors.push({
+            resource: 'keyValueStore',
+            runId: run.id,
+            id: run.defaultKeyValueStoreId,
+            message: cleanupError?.response?.data || cleanupError.message,
+          });
+        }
+      }
+
+      if (includeResources && run.defaultRequestQueueId && !seenQueues.has(run.defaultRequestQueueId)) {
+        try {
+          seenQueues.add(run.defaultRequestQueueId);
+          await deleteRequestQueue(run.defaultRequestQueueId);
+          deletedRequestQueues.push(run.defaultRequestQueueId);
+        } catch (cleanupError) {
+          errors.push({
+            resource: 'requestQueue',
+            runId: run.id,
+            id: run.defaultRequestQueueId,
+            message: cleanupError?.response?.data || cleanupError.message,
+          });
+        }
+      }
+
+      try {
+        await deleteRun(run.id);
+        deletedRuns.push(run.id);
+      } catch (cleanupError) {
+        errors.push({
+          resource: 'run',
+          runId: run.id,
+          message: cleanupError?.response?.data || cleanupError.message,
+        });
+      }
+    }
+
+    res.json({
+      message: includeResources ? 'Runs and related resources deleted' : 'All runs deleted',
+      deletedRuns,
+      deletedDatasets,
+      deletedKeyValueStores,
+      deletedRequestQueues,
+      errors,
+    });
+  } catch (error) {
+    console.error('Error during Apify cleanup:', error);
+    res.status(500).json({ error: error.message || 'Failed to clean up Apify resources' });
   }
 });
 
